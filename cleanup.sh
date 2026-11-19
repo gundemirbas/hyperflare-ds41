@@ -2,11 +2,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Flare community contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Reclaim disk on the serving hosts. Every rollout leaves the previous image and
-# every export leaves a core, so this keeps the current image and the newest core
-# per host and drops the rest.
+# Reclaim disk on the serving hosts.
 #
-#   ./cleanup.sh              # report and reclaim
+# Rank zero holds the complete core because it distributes each peer's ranges at
+# launch, so its cache root is never pruned. A peer keeps a verified cache entry
+# from whichever root its agent last used; an older root left behind by a
+# previous launch is dead weight and is removed whole.
+#
+#   ./cleanup.sh              # reclaim
 #   ./cleanup.sh --dry-run    # report only
 set -eu
 
@@ -15,9 +18,10 @@ cd "${HERE}"
 . ./cluster.env
 . ./lib.sh
 
-keep_image=${1:-$(cat "${HERE}/.last-build" 2>/dev/null || echo "")}
 dry=0
 [ "${1:-}" = "--dry-run" ] && dry=1
+keep_image=$(cat "${HERE}/.last-build" 2>/dev/null || echo "")
+rank0=$(first_node)
 
 note "disk before"
 for host in ${NODES}; do
@@ -28,30 +32,46 @@ done
 
 for host in ${NODES}; do
     note "${host}"
+    if [ "${host}" = "${rank0}" ]; then
+        step "rank zero holds the distribution source; cache roots untouched"
+        cache_cleanup=0
+    else
+        cache_cleanup=1
+    fi
+
     ssh_to "${host}" "
         set -e
-        # Dead containers from earlier preparations.
         docker ps -aq --filter status=exited | xargs -r docker rm >/dev/null 2>&1 || true
 
-        # Images: keep the current tag and the one before it, drop the rest.
         keep='${REGISTRY}/flare-node:${keep_image}'
         docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'flare-node' | while read -r tag; do
             case \"\$tag\" in
-                \"\$keep\"|'${REGISTRY}/flare-node:latest'|'flare-node:latest'|'flare-node-base:latest'|'flare-serving:latest') ;;
+                \"\$keep\"|'${REGISTRY}/flare-node:latest'|'flare-node:latest'|'flare-node-base:latest') ;;
                 *) docker rmi -f \"\$tag\" >/dev/null 2>&1 || true; echo \"   removed image \$tag\" ;;
             esac
         done
         docker image prune -f >/dev/null 2>&1 || true
 
-        # Cores: keep the entry the group serves from, drop older ones.
-        for root in \$HOME/.cache/flare/cores/models \$HOME/.cache/flare/models; do
-            [ -d \"\$root\" ] || continue
-            newest=\$(ls -1dt \$root/*/* 2>/dev/null | head -1 || true)
-            [ -n \"\$newest\" ] || continue
-            ls -1dt \$root/*/* 2>/dev/null | tail -n +2 | while read -r old; do
-                rm -rf \"\$old\"; echo \"   removed core \$old\"
-            done
-        done
+        if [ '${cache_cleanup}' = '1' ]; then
+            # The agent passes --core-cache \$HOME/.cache/flare, so the live entry
+            # lands under models/. A newer entry there makes cores/ stale.
+            if [ -d \"\$HOME/.cache/flare/models\" ] && [ -d \"\$HOME/.cache/flare/cores\" ]; then
+                live=\$(find \$HOME/.cache/flare/models -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+                if [ -n \"\$live\" ]; then
+                    size=\$(du -sh \$HOME/.cache/flare/cores 2>/dev/null | cut -f1)
+                    rm -rf \"\$HOME/.cache/flare/cores\"
+                    echo \"   removed stale core root (\$size)\"
+                fi
+            fi
+            # Older entries inside the live root still go.
+            root=\$HOME/.cache/flare/models
+            [ -d \"\$root\" ] || root=\$HOME/.cache/flare/cores
+            if [ -d \"\$root\" ]; then
+                ls -1dt \$root/*/* 2>/dev/null | tail -n +2 | while read -r old; do
+                    rm -rf \"\$old\"; echo \"   removed old entry \$old\"
+                done
+            fi
+        fi
         df -h / | tail -1 | awk '{print \"   after: \"\$4\" free\"}'
     "
 done
