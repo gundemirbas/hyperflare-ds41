@@ -43,10 +43,10 @@ for host in ${NODES}; do
         set -e
         docker ps -aq --filter status=exited | xargs -r docker rm >/dev/null 2>&1 || true
 
-        keep='${REGISTRY}/flare-node:${keep_image}'
+        keep="flare-node:${keep_image}"
         docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'flare-node' | while read -r tag; do
             case \"\$tag\" in
-                \"\$keep\"|'${REGISTRY}/flare-node:latest'|'flare-node:latest'|'flare-node-base:latest') ;;
+                \"\$keep\"|'flare-node:latest'|'flare-node-base:latest') ;;
                 *) docker rmi -f \"\$tag\" >/dev/null 2>&1 || true; echo \"   removed image \$tag\" ;;
             esac
         done

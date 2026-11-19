@@ -33,9 +33,8 @@ instance requires that tier, because the host prefix store has to see every rank
 |---|---|
 | `cluster.env` | hosts, group name, registry, concurrency, paths |
 | `lib.sh` | SSH, copy, commit and health helpers |
-| `registry.sh` | registry on the control node, docker or podman |
-| `build.sh` | build the node image at a revision and push it |
-| `rollout.sh` | pull, extract the binary, install it, refresh the agent |
+| `build.sh` | build the node image at a revision |
+| `rollout.sh` | get the image onto every host, extract the binary, install it |
 | `pair.sh` | install each agent and pair it with the controller |
 | `group.sh` | Orbit group up, down, status, health |
 | `archive.sh` | copy the complete core onto the control node |
@@ -47,8 +46,7 @@ instance requires that tier, because the host prefix store has to see every rank
 ## Commands
 
 ```sh
-./deploy.sh registry     # registry on the control node
-./deploy.sh build        # node image at COMMIT, pushed
+./deploy.sh build        # node image at COMMIT
 ./deploy.sh rollout      # binary and agent on every host
 ./deploy.sh pair         # pair every host with the controller
 ./deploy.sh up           # Orbit group, waits for /health
@@ -57,8 +55,8 @@ instance requires that tier, because the host prefix store has to see every rank
 ./deploy.sh cleanup      # reclaim disk on the serving hosts
 ```
 
-`./deploy.sh all` runs registry, build, rollout, pair and up in that order, then
-cleans up. `./deploy.sh rollback` restores the binary that `rollout.sh` saved in
+`./deploy.sh all` runs build, rollout, pair and up in that order, then cleans
+up. `./deploy.sh rollback` restores the binary that `rollout.sh` saved in
 `/opt/flare-previous` and restarts the group.
 
 A preparation change — kernels, capacities, concurrency — needs a new core before
@@ -93,5 +91,6 @@ root or `ARCHIVE_ROOT`.
 
 - The control node reaches every host over SSH as an unprivileged user with sudo.
 - `docker` on the hosts; the registry runs under `docker` or `podman`.
-- The registry speaks plain HTTP, so each host trusts it through
-  `insecure-registries`; `rollout.sh` configures that once per host.
+
+A host without the image receives it from the build host with
+`docker save … | ssh … docker load`, so no registry is involved.

@@ -4,7 +4,6 @@
 #
 # One entry point for the whole control plane. Run it on the control node.
 #
-#   ./deploy.sh registry     start the local registry
 #   ./deploy.sh cleanup      reclaim disk on the serving hosts
 #   ./deploy.sh build        build both images at ${COMMIT} and push
 #   ./deploy.sh rollout      pull the node image, install the binary, refresh agents
@@ -14,7 +13,7 @@
 #   ./deploy.sh up|down      start or stop the Orbit group
 #   ./deploy.sh status       group and node status
 #   ./deploy.sh rollback     restore the previous binary and restart the group
-#   ./deploy.sh all          registry, build, rollout, up
+#   ./deploy.sh all          build, rollout, pair, up
 #   ./deploy.sh all --with-export   the same, plus prepare
 set -eu
 
@@ -27,7 +26,6 @@ command=${1:-status}
 shift 2>/dev/null || true
 
 case "${command}" in
-    registry) ./registry.sh start ;;
     cleanup)  ./cleanup.sh "$@" ;;
     build)    ./build.sh "$@" ;;
     rollout)  ./rollout.sh "$@" ;;
@@ -55,7 +53,6 @@ case "${command}" in
         ./group.sh up
         ;;
     all)
-        ./registry.sh start
         ./build.sh
         ./rollout.sh
         ./pair.sh

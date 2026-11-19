@@ -18,7 +18,7 @@ cd "${HERE}"
 wait_after=${1:-}
 short=$(cat "${HERE}/.last-build" 2>/dev/null || echo "")
 [ -n "${short}" ] || fatal "no build recorded; run ./build.sh first"
-image="${REGISTRY}/flare-node:${short}"
+image="flare-node:${short}"
 
 rank0=$(first_node)
 rendezvous="${rank0}:29630"
