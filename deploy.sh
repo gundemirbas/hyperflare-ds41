@@ -11,7 +11,7 @@
 #   ./deploy.sh up           launch the group and wait for health
 #   ./deploy.sh down         stop the group
 #   ./deploy.sh status       group state and health
-#   ./deploy.sh controller   keep the group running as a container (start|stop|logs)
+#   ./deploy.sh unit         install the systemd unit that brings the group up
 #   ./deploy.sh archive      copy the complete core onto the control node
 #   ./deploy.sh cleanup      reclaim disk on the serving hosts
 #   ./deploy.sh prepare      export and join inside the node image (hours)
@@ -104,6 +104,12 @@ cmd_pair() {
         | grep -E '^(NODE|thinkstation|gx10)' | sed 's/^/   /'
 }
 
+health_code() {
+    ssh_to "$(first_node)" \
+        'curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8000/health' 2>/dev/null \
+        || echo 000
+}
+
 resolve_core() {
     if [ -n "${CORE}" ]; then
         echo "${CORE}"
@@ -114,6 +120,10 @@ resolve_core() {
 
 cmd_up() {
     flare=$(flare_bin)
+    if [ "$(health_code)" = "200" ]; then
+        step "already healthy; nothing to do"
+        return 0
+    fi
     core=$(resolve_core)
     [ -n "${core}" ] || fatal "no prepared core under ${CORE_ROOT}"
     note "core ${core}"
@@ -133,7 +143,7 @@ cmd_up() {
         --dangerously-accept-publisher '${PUBLISHER_NAMESPACE}' \
         --dangerously-approve-key '${APPROVE_KEY}'" | tail -3
 
-    wait_health "$(first_node)" 90 || fatal "the group did not become healthy"
+    wait_health "$(first_node)" "${HEALTH_ATTEMPTS:-90}" || fatal "the group did not become healthy"
 }
 
 cmd_down() {
@@ -144,40 +154,69 @@ cmd_down() {
 cmd_status() {
     flare=$(flare_bin)
     ssh_to "${CONTROL_HOST}" "${flare} orbit ls --cluster '${CLUSTER}'"
-    code=$(ssh_to "$(first_node)" \
-        'curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8000/health' 2>/dev/null || echo 000)
-    step "health ${code}"
+    step "health $(health_code)"
 }
 
-cmd_controller() {
-    action=${1:-start}
+cmd_watch() {
+    flare=$(flare_bin)
+    note "watching ${GROUP}; Ctrl-C stops watching, not the group"
+    while true; do
+        if ssh_to "${CONTROL_HOST}" "${flare} orbit ls --cluster '${CLUSTER}' 2>/dev/null" | grep -q running; then
+            sleep "${WATCH_INTERVAL:-60}"
+            continue
+        fi
+        # At boot the peers' agents may not answer yet; wait for the cluster.
+        if ! ssh_to "${CONTROL_HOST}" "${flare} orbit status --cluster '${CLUSTER}' 2>/dev/null" | grep -q "$(ssh_to "$(first_node)" 'hostname')"; then
+            step "$(date -u +%H:%M:%S) agents not ready"
+            sleep 30
+            continue
+        fi
+        step "$(date -u +%H:%M:%S) launching"
+        HEALTH_ATTEMPTS=${WATCH_HEALTH_ATTEMPTS:-24} cmd_up || true
+        sleep 30
+    done
+}
+
+cmd_unit() {
+    action=${1:-install}
+    unit=flare-group.service
     case "${action}" in
-        start)
-            image=$(image_name)
-            cat > /tmp/controller-loop.sh <<LOOP
-#!/bin/sh
-# Written by deploy.sh. Relaunches the group when it is not running.
-while true; do
-    if ! /usr/local/bin/flare orbit ls --cluster ${CLUSTER} 2>/dev/null | grep -q running; then
-        echo "\$(date -u +%H:%M:%S) group not running; launching"
-        (cd ${HERE} && FLARE_BIN=/usr/local/bin/flare ./deploy.sh up) 2>&1 | tail -2
-    fi
-    sleep ${INTERVAL}
-done
-LOOP
-            copy_to "${CONTROL_HOST}" /tmp/controller-loop.sh "${HOME}/.config/flare/controller-loop.sh"
-            note "controller container on ${CONTROL_HOST} (${image})"
-            ssh_to "${CONTROL_HOST}" "
-                docker rm -f ${CONTROLLER} >/dev/null 2>&1 || true
-                docker run -d --name ${CONTROLLER} --restart unless-stopped --network=host \
-                    --user \$(id -u):\$(id -g) --volume \$HOME:\$HOME --env HOME=\$HOME \
-                    --entrypoint /bin/sh ${image} ${HOME}/.config/flare/controller-loop.sh >/dev/null
-                docker ps --filter name=${CONTROLLER} --format '   {{.Names}} {{.Status}}'
-            "
+        remove)
+            ssh_to "${CONTROL_HOST}" "systemctl --user disable --now ${unit} >/dev/null 2>&1 || true; rm -f ~/.config/systemd/user/${unit}; systemctl --user daemon-reload; echo '   removed'"
             ;;
-        stop) ssh_to "${CONTROL_HOST}" "docker rm -f ${CONTROLLER} >/dev/null 2>&1; echo '   removed'" ;;
-        logs) ssh_to "${CONTROL_HOST}" "docker logs --tail 20 ${CONTROLLER} 2>&1" ;;
-        *) fatal "usage: ./deploy.sh controller start|stop|logs" ;;
+        install|"")
+            cat > /tmp/flare-group.service <<UNIT
+[Unit]
+Description=Keep the ${GROUP} serving group running
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=${HERE}
+ExecStart=${HERE}/deploy.sh watch
+Restart=always
+RestartSec=30
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
+UNIT
+            copy_to "${CONTROL_HOST}" /tmp/flare-group.service "${HOME}/.config/systemd/user/${unit}"
+            note "installing ${unit} on ${CONTROL_HOST}"
+            ssh_to "${CONTROL_HOST}" "systemctl --user daemon-reload && systemctl --user enable ${unit} >/dev/null && systemctl --user restart ${unit}"
+            sleep 5
+            ssh_to "${CONTROL_HOST}" "systemctl --user is-enabled ${unit}; systemctl --user is-active ${unit} || true" | sed 's/^/   /'
+            ;;
+        status)
+            ssh_to "${CONTROL_HOST}" "systemctl --user status ${unit} --no-pager 2>&1 | head -6"
+            ;;
+        logs)
+            ssh_to "${CONTROL_HOST}" "journalctl --user -u ${unit} -n 15 --no-pager 2>&1 | tail -15"
+            ;;
+        *) fatal "usage: ./deploy.sh unit install|remove|status|logs" ;;
     esac
 }
 
@@ -242,7 +281,8 @@ case "${1:-status}" in
     up) cmd_up ;;
     down) cmd_down ;;
     status) cmd_status ;;
-    controller) shift 2>/dev/null || true; cmd_controller "$@" ;;
+    unit) shift 2>/dev/null || true; cmd_unit "$@" ;;
+    watch) cmd_watch ;;
     archive) shift 2>/dev/null || true; cmd_archive "$@" ;;
     cleanup) cmd_cleanup ;;
     prepare) shift 2>/dev/null || true; exec ./prepare.sh "$@" ;;

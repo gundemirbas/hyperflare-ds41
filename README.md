@@ -37,7 +37,7 @@ instance requires that tier.
 ./deploy.sh pair         # install each agent and pair it with the controller
 ./deploy.sh up           # launch the group, wait for health
 ./deploy.sh status       # group state and health
-./deploy.sh controller   # keep the group running as a container
+./deploy.sh unit         # systemd unit that brings the group up
 ./deploy.sh archive      # complete core onto the control node
 ./deploy.sh cleanup      # reclaim disk on the serving hosts
 ./deploy.sh prepare      # export and join, inside the node image
@@ -54,9 +54,12 @@ Replacing an agent restarts it, and a restart stops the ranks it supervises, so
 
 The agents are enabled user units with linger, so they return after a reboot. The
 group does not: Orbit's controller is a command, and an agent does not relaunch a
-group after its own restart. `./deploy.sh controller start` runs a container from
-the node image that re-issues the launch whenever the group is not running, with
-`--restart unless-stopped` so it returns with docker.
+group after its own restart.
+
+`./deploy.sh unit` installs `flare-group.service` as a user unit on the control
+node. It runs `./deploy.sh up` at start and lets systemd retry on failure, which
+covers the boot window where the peers' agents are not answering yet. `up` leaves
+an already healthy group alone, so a manual run and the unit do not fight.
 
 ## Disk
 
