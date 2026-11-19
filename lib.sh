@@ -22,13 +22,6 @@ ssh_to() {
     fi
 }
 
-# local_host  prints the first management address; advisory only, because a
-# node with both wired and wireless addresses may report either one.
-local_host() {
-    ip -4 -o addr show 2>/dev/null \
-        | awk '$2 !~ /^(lo|docker)/ && $4 ~ /^192\.168\.0\./ { sub(/\/.*/, "", $4); print $4; exit }'
-}
-
 # commit_sha COMMIT  resolves a branch or tag to a full commit. A full object id
 # is taken as given, so a build can pin a revision that no ref points at.
 commit_sha() {

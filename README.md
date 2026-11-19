@@ -1,82 +1,97 @@
 # Deploy
 
-Automation for the Spark cluster: builds both container images, pushes them to a
-registry on the control node, installs the serving binary on every Spark, and
-drives the Orbit group.
+Automation for one prepared model served across three DGX Sparks. Rank zero runs
+the Orbit controller and the registry; a fourth machine keeps the checkpoint and
+serves it over SSHFS so a preparation never has to copy it.
 
-Everything here runs on the control node and reaches the other hosts over SSH. A
-repository update is followed by `./deploy.sh all`; the images carry the commit
-they were built from.
+## Hosts
 
-## Images
+| Host | Role |
+|---|---|
+| rank zero (248) | controller identity, registry, rank zero of the model |
+| peers (247, 246) | ranks one and two |
+| checkpoint host (245) | holds the checkpoint, exports it read-only over SSHFS |
+
+The container images carry the work, so a repository update is a rebuild rather
+than a manual install:
 
 | Image | Built on | Purpose |
 |---|---|---|
-| `flare-node` | an aarch64 Spark | `flare` binary plus the Ignition preparation environment |
-| `flare-control-plane` | the x86_64 control node | `flare` CLI and the `selene` pool manager |
+| `flare-node` | rank zero | the `flare` binary plus the Ignition preparation environment |
 
-`flare-node` is both the source of the serving binary — extracted and installed
-as `/usr/bin/flare` — and the container that runs `ignition export` and
-`ignition join`. Serving itself stays on the host under the Orbit agents, because
-a rank needs the host's GPUs, fabric devices and RoCE stack.
+`flare-node` is both the source of the serving binary, extracted and installed as
+`/usr/bin/flare` on every host, and the container that runs `ignition export` and
+`ignition join`. Serving itself stays on the host under the Orbit agents: a rank
+needs the host's GPUs, fabric devices and RoCE stack.
+
+There is no pool: each rank keeps its prefix cache on local disk. A multi-host
+instance requires that tier, because the host prefix store has to see every rank.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `cluster.env` | hosts, group name, registry, concurrency, commit |
-| `lib.sh` | SSH and health helpers |
-| `registry.sh` | local registry container on port 5000 |
-| `build.sh` | build both images at a revision and push them |
+| `cluster.env` | hosts, group name, registry, concurrency, paths |
+| `lib.sh` | SSH, copy, commit and health helpers |
+| `registry.sh` | registry on the control node, docker or podman |
+| `build.sh` | build the node image at a revision and push it |
 | `rollout.sh` | pull, extract the binary, install it, refresh the agent |
-| `prepare.sh` | export on rank zero plus joins, inside the node image |
-| `group.sh` | start, stop, list or health-check the Orbit group |
+| `pair.sh` | install each agent and pair it with the controller |
+| `group.sh` | Orbit group up, down, status, health |
+| `archive.sh` | copy the complete core onto the control node |
+| `cleanup.sh` | reclaim disk on the serving hosts |
+| `prepare.sh` | export and join, inside the node image |
 | `deploy.sh` | the entry point that sequences the above |
-| `node/ensure-registry-trust.sh` | make one Docker daemon trust the plain-HTTP registry |
+| `node/` | the image definition |
 
-## First run
+## Commands
 
 ```sh
-./deploy.sh registry     # registry container on this node
-./deploy.sh build        # both images, tagged with the commit
-./deploy.sh rollout      # binary and agent on every Spark
+./deploy.sh registry     # registry on the control node
+./deploy.sh build        # node image at COMMIT, pushed
+./deploy.sh rollout      # binary and agent on every host
+./deploy.sh pair         # pair every host with the controller
 ./deploy.sh up           # Orbit group, waits for /health
+./deploy.sh status       # group state
+./deploy.sh archive      # complete core onto the control node
+./deploy.sh cleanup      # reclaim disk on the serving hosts
 ```
 
-A preparation change — prepared kernels, capacities, concurrency — needs a new
-core before the group can serve:
+`./deploy.sh all` runs registry, build, rollout, pair and up in that order, then
+cleans up. `./deploy.sh rollback` restores the binary that `rollout.sh` saved in
+`/opt/flare-previous` and restarts the group.
+
+A preparation change — kernels, capacities, concurrency — needs a new core before
+the group can serve it:
 
 ```sh
 ./deploy.sh prepare      # hours; runs export and joins in containers
 ./deploy.sh up
 ```
 
-Rollback restores the binary that `rollout.sh` saved in `/opt/flare-previous`:
+`prepare.sh` mounts the checkpoint over SSHFS on rank zero and runs the export
+there, with each peer joining in its own container. It needs one shared
+credential, at least 32 bytes, private to its owner, identical on every host;
+the script creates it when absent and copies it to the peers.
 
-```sh
-./deploy.sh rollback
-```
+## Disk
+
+A three-rank core is about 470 GB on rank zero: three rank shards of 93 GB and the
+Engram tables. Its manifest names every file, so a launch from it requires all of
+them present and the source node keeps the complete artifact.
+
+A peer receives its own ranges on first launch and reuses the verified cache entry
+afterwards, so later launches transfer nothing. `archive.sh` keeps the complete
+core on the control node as a recovery source; a peer that loses its cache is
+restored without another export.
+
+`cleanup.sh` removes dead containers, image tags older than the recorded build,
+and cache roots the launcher no longer uses. It never touches rank zero's cache
+root or `ARCHIVE_ROOT`.
 
 ## Prerequisites
 
-- The control node can SSH to every Spark as an unprivileged user with sudo.
-  The Spark accounts use passwordless sudo; the control node's own sudo is not
-  needed by these scripts.
-- `docker` on the Sparks, `podman` on the control node.
-- The checkpoint is reachable over SSHFS from the first node in `NODES`;
-  `prepare.sh` mounts it at `CHECKPOINT_MOUNT` and leaves the copy on the source
-  host, never on the Sparks.
-- The registry listens on plain HTTP, so each Docker daemon trusts it through
+- The control node reaches every host over SSH as an unprivileged user with sudo.
+- `docker` on the hosts; the registry runs under `docker` or `podman`.
+- The registry speaks plain HTTP, so each host trusts it through
   `insecure-registries`; `rollout.sh` configures that once per host.
-
-## Where the complete core lives
-
-The export writes the complete core on rank zero: every rank's shard plus the
-Engram tables, about 470 GB for three ranks. Its manifest names every file, so a
-launch from that core requires all of them present; the source node keeps the
-complete artifact.
-
-A peer receives its own ranges on first launch and reuses the verified cache
-entry afterwards, so later launches transfer nothing. `archive.sh` copies the
-complete core onto the control node as a recovery source: a peer that loses its
-cache is restored without another export.
