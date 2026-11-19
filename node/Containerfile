@@ -21,6 +21,13 @@ RUN apt-get update \
 RUN git clone --filter=blob:none "${FLARE_REPOSITORY}" /src \
     && cd /src && git checkout "${FLARE_COMMIT}"
 
+# Optional local forks from patches/, applied before the binary is built. An
+# empty list builds the plain checkout. A patch that only touches Rust leaves the
+# preparation layer below unchanged.
+ARG FLARE_PATCHES=""
+COPY patches/ /src/patches/
+RUN cd /src && for patch in ${FLARE_PATCHES}; do git apply "/src/patches/${patch}"; done
+
 WORKDIR /src
 RUN cargo build --release --locked --manifest-path flare-cli/Cargo.toml
 
