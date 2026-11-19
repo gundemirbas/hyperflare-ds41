@@ -1,96 +1,78 @@
 # Deploy
 
-Automation for one prepared model served across three DGX Sparks. Rank zero runs
-the Orbit controller and the registry; a fourth machine keeps the checkpoint and
-serves it over SSHFS so a preparation never has to copy it.
+One entry point for a prepared model served across three DGX Sparks, plus the
+machine that holds the checkpoint.
 
 ## Hosts
 
 | Host | Role |
 |---|---|
-| rank zero (248) | controller identity, registry, rank zero of the model |
+| rank zero (248) | controller identity, build host, rank zero of the model |
 | peers (247, 246) | ranks one and two |
 | checkpoint host (245) | holds the checkpoint, exports it read-only over SSHFS |
 
-The container images carry the work, so a repository update is a rebuild rather
-than a manual install:
+`flare-node` is the only image: the `flare` binary plus the Ignition preparation
+environment. `./deploy.sh rollout` takes the binary out of it and installs it as
+`/usr/bin/flare` on every host. Serving stays on the host under the Orbit agents,
+because a rank needs the host's GPUs, fabric devices and RoCE stack.
 
-| Image | Built on | Purpose |
-|---|---|---|
-| `flare-node` | rank zero | the `flare` binary plus the Ignition preparation environment |
-
-`flare-node` is both the source of the serving binary, extracted and installed as
-`/usr/bin/flare` on every host, and the container that runs `ignition export` and
-`ignition join`. Serving itself stays on the host under the Orbit agents: a rank
-needs the host's GPUs, fabric devices and RoCE stack.
-
-There is no pool: each rank keeps its prefix cache on local disk. A multi-host
-instance requires that tier, because the host prefix store has to see every rank.
+Each rank keeps its prefix cache on local disk; there is no pool. A multi-host
+instance requires that tier.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `cluster.env` | hosts, group name, registry, concurrency, paths |
+| `deploy.sh` | every command |
+| `cluster.env` | hosts, group name, concurrency, paths |
 | `lib.sh` | SSH, copy, commit and health helpers |
-| `build.sh` | build the node image at a revision |
-| `rollout.sh` | get the image onto every host, extract the binary, install it |
-| `pair.sh` | install each agent and pair it with the controller |
-| `group.sh` | Orbit group up, down, status, health |
-| `archive.sh` | copy the complete core onto the control node |
-| `cleanup.sh` | reclaim disk on the serving hosts |
-| `prepare.sh` | export and join, inside the node image |
-| `deploy.sh` | the entry point that sequences the above |
+| `prepare.sh` | export and join inside the node image |
 | `node/` | the image definition |
 
 ## Commands
 
 ```sh
-./deploy.sh build        # node image at COMMIT
-./deploy.sh rollout      # binary and agent on every host
-./deploy.sh pair         # pair every host with the controller
-./deploy.sh up           # Orbit group, waits for /health
-./deploy.sh status       # group state
+./deploy.sh build        # node image at COMMIT on the control node
+./deploy.sh rollout      # image and binary on every host, agents refreshed
+./deploy.sh pair         # install each agent and pair it with the controller
+./deploy.sh up           # launch the group, wait for health
+./deploy.sh status       # group state and health
+./deploy.sh controller   # keep the group running as a container
 ./deploy.sh archive      # complete core onto the control node
 ./deploy.sh cleanup      # reclaim disk on the serving hosts
+./deploy.sh prepare      # export and join, inside the node image
+./deploy.sh all          # build, rollout, pair, up, cleanup
 ```
 
-`./deploy.sh all` runs build, rollout, pair and up in that order, then cleans
-up. `./deploy.sh rollback` restores the binary that `rollout.sh` saved in
+`./deploy.sh rollback` restores the binary that the rollout saved in
 `/opt/flare-previous` and restarts the group.
 
-A preparation change — kernels, capacities, concurrency — needs a new core before
-the group can serve it:
+Replacing an agent restarts it, and a restart stops the ranks it supervises, so
+`rollout` and `pair` take a running service down. Run `up` afterwards.
 
-```sh
-./deploy.sh prepare      # hours; runs export and joins in containers
-./deploy.sh up
-```
+## Keeping it up
 
-`prepare.sh` mounts the checkpoint over SSHFS on rank zero and runs the export
-there, with each peer joining in its own container. It needs one shared
-credential, at least 32 bytes, private to its owner, identical on every host;
-the script creates it when absent and copies it to the peers.
+The agents are enabled user units with linger, so they return after a reboot. The
+group does not: Orbit's controller is a command, and an agent does not relaunch a
+group after its own restart. `./deploy.sh controller start` runs a container from
+the node image that re-issues the launch whenever the group is not running, with
+`--restart unless-stopped` so it returns with docker.
 
 ## Disk
 
 A three-rank core is about 470 GB on rank zero: three rank shards of 93 GB and the
 Engram tables. Its manifest names every file, so a launch from it requires all of
-them present and the source node keeps the complete artifact.
+them and the source node keeps the complete artifact.
 
 A peer receives its own ranges on first launch and reuses the verified cache entry
-afterwards, so later launches transfer nothing. `archive.sh` keeps the complete
-core on the control node as a recovery source; a peer that loses its cache is
-restored without another export.
+afterwards. `./deploy.sh archive` keeps the complete core on the control node as a
+recovery source, and `./deploy.sh cleanup` removes dead containers, older image
+tags and cache roots the launcher no longer uses. It never touches rank zero's
+cache root or `ARCHIVE_ROOT`.
 
-`cleanup.sh` removes dead containers, image tags older than the recorded build,
-and cache roots the launcher no longer uses. It never touches rank zero's cache
-root or `ARCHIVE_ROOT`.
+## Preparation
 
-## Prerequisites
-
-- The control node reaches every host over SSH as an unprivileged user with sudo.
-- `docker` on the hosts; the registry runs under `docker` or `podman`.
-
-A host without the image receives it from the build host with
-`docker save … | ssh … docker load`, so no registry is involved.
+`./deploy.sh prepare` mounts the checkpoint over SSHFS on rank zero and runs the
+export there, with each peer joining in its own container. It needs one shared
+credential, at least 32 bytes, private to its owner, identical on every host; the
+script creates it when absent.

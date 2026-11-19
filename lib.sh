@@ -10,6 +10,19 @@ fatal() { echo "error: $*" >&2; exit 1; }
 note() { echo "== $*"; }
 step() { echo "   $*"; }
 
+# flare_bin  prints the flare executable to call. The scripts run on the host,
+# where it is installed under /usr/bin, and inside the controller container,
+# where the image carries it under /usr/local/bin.
+flare_bin() {
+    if [ -n "${FLARE_BIN:-}" ]; then
+        echo "${FLARE_BIN}"
+    elif [ -x /usr/bin/flare ]; then
+        echo /usr/bin/flare
+    else
+        echo /usr/local/bin/flare
+    fi
+}
+
 # ssh_to HOST COMMAND...  runs a command on another host as SSH_USER, or locally
 # when HOST is this machine, so the control node never SSHes to itself.
 ssh_to() {
