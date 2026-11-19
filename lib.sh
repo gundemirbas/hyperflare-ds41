@@ -29,8 +29,18 @@ local_host() {
         | awk '$2 !~ /^(lo|docker)/ && $4 ~ /^192\.168\.0\./ { sub(/\/.*/, "", $4); print $4; exit }'
 }
 
-# commit_sha COMMIT  resolves a branch or tag to a full commit on the build host.
+# commit_sha COMMIT  resolves a branch or tag to a full commit. A full object id
+# is taken as given, so a build can pin a revision that no ref points at.
 commit_sha() {
+    case "$1" in
+        *[!0-9a-f]*) ;;
+        *)
+            if [ ${#1} -eq 40 ]; then
+                echo "$1"
+                return
+            fi
+            ;;
+    esac
     ssh_to "${BUILD_HOST}" \
         "git ls-remote https://github.com/NVIDIA/hyperflare-inference.git '$1' | head -1 | cut -f1"
 }

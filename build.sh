@@ -32,7 +32,7 @@ for patch in ${PATCHES}; do
     copy_to "${BUILD_HOST}" "${HERE}/patches/${patch}" "${HOME}/flare-build-node/patches/${patch}"
 done
 ssh_to "${BUILD_HOST}" \
-    "cd ~/flare-build-node && docker build --build-arg FLARE_COMMIT=${sha} --build-arg FLARE_PATCHES='${PATCHES}' -t ${REGISTRY}/flare-node:${short} ."
+    "cd ~/flare-build-node && docker build -f Containerfile --build-arg FLARE_COMMIT=${sha} --build-arg FLARE_PATCHES='${PATCHES}' -t ${REGISTRY}/flare-node:${short} ."
 ssh_to "${BUILD_HOST}" "docker push ${REGISTRY}/flare-node:${short}"
 
 note "control-plane image on ${CONTROL_HOST} (x86_64)"
@@ -44,7 +44,7 @@ for patch in ${PATCHES}; do
     copy_to "${CONTROL_HOST}" "${HERE}/patches/${patch}" "${HOME}/flare-build-control/patches/${patch}"
 done
 ssh_to "${CONTROL_HOST}" \
-    "cd ~/flare-build-control && podman build --build-arg FLARE_COMMIT=${sha} --build-arg FLARE_PATCHES='${PATCHES}' -t ${REGISTRY}/flare-control-plane:${short} ."
+    "cd ~/flare-build-control && podman build -f Containerfile --build-arg FLARE_COMMIT=${sha} --build-arg FLARE_PATCHES='${PATCHES}' -t ${REGISTRY}/flare-control-plane:${short} ."
 ssh_to "${CONTROL_HOST}" "podman push ${REGISTRY}/flare-control-plane:${short}"
 
 note "pushed"

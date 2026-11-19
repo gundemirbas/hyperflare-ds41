@@ -32,9 +32,20 @@ rank0=$(first_node)
 [ -n "${core}" ] || fatal "no prepared core under ${CORE_ROOT}"
 
 if [ -n "${archive}" ]; then
+    # Prefer the archive on the control node: a local path is uploaded directly,
+    # and it is the copy that survives the source node being trimmed.
+    name=$(basename "$(dirname "${core}")")
+    local_core="${ARCHIVE_ROOT}/${name}/model.safetensors"
+    if ssh_to "${CONTROL_HOST}" "test -f '${local_core}'"; then
+        source_path=${local_core}
+        step "source: archive on ${CONTROL_HOST}"
+    else
+        source_path="${rank0}:${core}"
+        step "source: ${rank0} (no archive yet; run ./archive.sh)"
+    fi
     note "complete core onto ${archive}"
     ssh_to "${CONTROL_HOST}" \
-        "~/.local/bin/flare orbit push '${rank0}:${core}' --to '${archive}' --cluster '${CLUSTER}'" | tail -4
+        "~/.local/bin/flare orbit push '${source_path}' --to '${archive}' --cluster '${CLUSTER}'" | tail -4
     note "verified directories"
     ssh_to "${CONTROL_HOST}" "~/.local/bin/flare orbit cores --cluster '${CLUSTER}'" | head -12
     exit 0

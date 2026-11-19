@@ -1,75 +1,93 @@
-# Patches
+# Deploy
 
-Optional source changes applied to the node image build. `cluster.env` names the
-files in `PATCHES`; an empty value builds the plain `FLARE_COMMIT` checkout, and
-`build.sh` passes the list to the image as `FLARE_PATCHES`.
+Automation for the Spark cluster: builds both container images, pushes them to a
+registry on the control node, installs the serving binary on every Spark, and
+drives the Orbit group.
 
-## 0001-peer-loads-its-own-staged-core.patch
+Everything here runs on the control node and reaches the other hosts over SSH. A
+repository update is followed by `./deploy.sh all`; the images carry the commit
+they were built from.
 
-A peer already accepts a local core: `distribution::peer` takes the path from
-`--core`, leases the cache entry, and `verify_local_core` rejects a core whose
-signed envelope, model, tensor-parallel size or cluster export differs from rank
-zero's. The agent passes such a path only when the grant names that node as the
-core's source, and the controller names exactly one holder, so every peer
-receives its ranges at launch even when `orbit push` has already staged that
-rank's directory on the node.
+## Images
 
-The patch adds a per-member `staged` flag. The controller sets it when the node's
-STATUS reports that rank's staged directory verified, and the agent starts the
-rank from its own copy. Rank zero keeps distributing whatever a peer cannot
-supply, so partial staging stays correct.
+| Image | Built on | Purpose |
+|---|---|---|
+| `flare-node` | an aarch64 Spark | `flare` binary plus the Ignition preparation environment |
+| `flare-control-plane` | the x86_64 control node | `flare` CLI and the `selene` pool manager |
 
-### Why it matters
+`flare-node` is both the source of the serving binary — extracted and installed
+as `/usr/bin/flare` — and the container that runs `ignition export` and
+`ignition join`. Serving itself stays on the host under the Orbit agents, because
+a rank needs the host's GPUs, fabric devices and RoCE stack.
 
-A three-rank core is about 470 GB on the source node: three rank shards of 93 GB
-and the Engram tables. One rank needs about 157 GB, so roughly two thirds of that
-core exists only to be sent to the other two ranks. With every peer staged, the
-source node needs its own share alone.
+## Files
 
-### Enabling it
+| File | Purpose |
+|---|---|
+| `cluster.env` | hosts, group name, registry, concurrency, commit |
+| `lib.sh` | SSH and health helpers |
+| `registry.sh` | local registry container on port 5000 |
+| `build.sh` | build both images at a revision and push them |
+| `rollout.sh` | pull, extract the binary, install it, refresh the agent |
+| `prepare.sh` | export on rank zero plus joins, inside the node image |
+| `group.sh` | start, stop, list or health-check the Orbit group |
+| `deploy.sh` | the entry point that sequences the above |
+| `node/ensure-registry-trust.sh` | make one Docker daemon trust the plain-HTTP registry |
+
+## First run
 
 ```sh
-# Once per export, from the control node: stage each rank's directory.
-./stage.sh
-
-# Then build with the patch and roll out.
-PATCHES=0001-peer-loads-its-own-staged-core.patch ./build.sh
-./rollout.sh
-./group.sh up
+./deploy.sh registry     # registry container on this node
+./deploy.sh build        # both images, tagged with the commit
+./deploy.sh rollout      # binary and agent on every Spark
+./deploy.sh up           # Orbit group, waits for /health
 ```
 
-`stage.sh` prints the directories each node holds; `./deploy.sh control` and
-`orbit cores` show their verification state. A rank whose directory is not
-verified falls back to receiving from rank zero.
+A preparation change — prepared kernels, capacities, concurrency — needs a new
+core before the group can serve:
 
-### Status
+```sh
+./deploy.sh prepare      # hours; runs export and joins in containers
+./deploy.sh up
+```
 
-The patch applies to the checkout that `build.sh` clones and has passed
-`git apply --check`, but it has not been built or run against a cluster. It
-changes which node supplies a rank's core data, which is a core-loading concern:
-upstream requires a maintainer decision for changes there, so treat this as a
-local fork rather than a contribution.
+Rollback restores the binary that `rollout.sh` saved in `/opt/flare-previous`:
 
-### Pin the commit
+```sh
+./deploy.sh rollback
+```
 
-The patch applies to one checkout. Build with an explicit revision when `PATCHES`
-is set — `./build.sh <sha>` — because `main` moves and a moved tree can reject
-the hunks. The revision the patch was generated against is the clone this
-directory was written in; `git apply --check` against the build host's clone
-confirms it before an image is built.
+## Prerequisites
 
-### Both images carry the patch
+- The control node can SSH to every Spark as an unprivileged user with sudo.
+  The Spark accounts use passwordless sudo; the control node's own sudo is not
+  needed by these scripts.
+- `docker` on the Sparks, `podman` on the control node.
+- The checkpoint is reachable over SSHFS from the first node in `NODES`;
+  `prepare.sh` mounts it at `CHECKPOINT_MOUNT` and leaves the copy on the source
+  host, never on the Sparks.
+- The registry listens on plain HTTP, so each Docker daemon trusts it through
+  `insecure-registries`; `rollout.sh` configures that once per host.
 
-`grant.rs` is the signed grant schema, `controller.rs` decides placement, and
-`agent.rs` runs on the serving hosts. The controller and the agent therefore have
-to be built from patched sources: `build.sh` passes `PATCHES` to the node image
-and to the control-plane image alike.
+## Where the complete core lives
 
-`control.sh ensure` installs the controller CLI out of the control-plane image
-over `~/.local/bin/flare`, so the command that writes a grant is the one that
-knows the new field. `rollout.sh` does the same for `/usr/bin/flare` on each
-host from the node image.
+The export writes the complete core on rank zero: every rank's shard plus the
+Engram tables, about 470 GB for three ranks. One rank needs about 157 GB, so most
+of that core exists to be distributed. `archive.sh` copies it onto the control
+node, after which the source node only needs its own share:
 
-A mixed pair still launches: `staged` carries `#[serde(default)]`, so an older
-agent ignores the flag and receives as before, and an older controller never sets
-it. The saving appears only once both sides are patched.
+```sh
+./deploy.sh archive              # complete core onto the control node from rank zero
+./deploy.sh stage --archive 246  # ...or onto a single host
+./deploy.sh stage                # each rank's own directory on its host
+./deploy.sh control              # controller CLI from the control-plane image
+./deploy.sh up                   # launch
+```
+
+With every rank staged, the source's `weights/tp3/rank-<n>` and `deployments`
+entries for the other ranks can go. A peer that loses its staged directory is
+restored by `./deploy.sh stage`, which uploads from the archive rather than
+sending rank zero's copy, and a re-export is the last resort.
+
+Keep the archive until the next export replaces it; `cleanup.sh` does not touch
+`ARCHIVE_ROOT`.
