@@ -93,7 +93,10 @@ cmd_pair() {
         code=$(ssh_to "${host}" \
             '/usr/bin/flare agent install 2>&1 | sed -n "s/^join code:[[:space:]]*//p"' | tr -d '\r' | head -1)
         if [ -z "${code}" ]; then
-            step "no join code; assuming an existing pairing"
+            # The agent already trusts a controller. Pairing it again would need
+            # `flare agent reset`, which unlinks the node from the controller, so
+            # leave the registration alone.
+            step "already paired; registration left in place"
             continue
         fi
         ssh_to "${CONTROL_HOST}" "${flare} orbit forget '${name}' >/dev/null 2>&1 || true"
@@ -102,6 +105,10 @@ cmd_pair() {
     note "membership"
     ssh_to "${CONTROL_HOST}" "${flare} orbit status --cluster ${CLUSTER}" \
         | grep -E '^(NODE|thinkstation|gx10)' | sed 's/^/   /'
+
+    # Installing an agent restarts it, which stops the ranks it supervises; the
+    # unit is what brings the group back, so it is part of the install.
+    cmd_unit install
 }
 
 health_code() {
