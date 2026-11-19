@@ -73,3 +73,25 @@ host from the node image.
 A mixed pair still launches: `staged` carries `#[serde(default)]`, so an older
 agent ignores the flag and receives as before, and an older controller never sets
 it. The saving appears only once both sides are patched.
+
+### Where the complete core lives
+
+The saving is only safe while some node still holds a complete copy. The export
+writes that copy on rank zero, and rank zero is the node whose payloads can then
+be removed, so the archive has to move first:
+
+```sh
+./stage.sh --archive 246      # complete core on the host with the most room
+./stage.sh                    # per-rank directories on every host
+```
+
+Measured free space before that decision: rank zero 301 GB, peers 617 GB and
+641 GB, control node 381 GB. A complete three-rank core is about 470 GB, so the
+control node cannot hold it today; the peers can.
+
+A peer that is not staged still receives its ranges from rank zero. Once the
+other ranks' payloads are removed there, such a launch fails instead of falling
+back quietly. The guard belongs in placement: refuse to start when the source
+holds no complete copy and a member has no verified staged directory. Until that
+check exists, treat every peer staged as a prerequisite for removing payloads
+from rank zero, and verify with `orbit cores` before deleting anything.
