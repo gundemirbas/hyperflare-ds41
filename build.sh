@@ -26,8 +26,13 @@ note "node image on ${BUILD_HOST} (aarch64)"
 ssh_to "${BUILD_HOST}" 'rm -rf ~/flare-build-node && mkdir -p ~/flare-build-node'
 copy_to "${BUILD_HOST}" "${HERE}/node/Containerfile" "${HOME}/flare-build-node/Containerfile"
 copy_to "${BUILD_HOST}" "${HERE}/node/entrypoint.sh" "${HOME}/flare-build-node/entrypoint.sh" 2>/dev/null || true
+# The build context needs a non-empty patches directory even when nothing applies.
+ssh_to "${BUILD_HOST}" 'mkdir -p ~/flare-build-node/patches && touch ~/flare-build-node/patches/.keep'
+for patch in ${PATCHES}; do
+    copy_to "${BUILD_HOST}" "${HERE}/patches/${patch}" "${HOME}/flare-build-node/patches/${patch}"
+done
 ssh_to "${BUILD_HOST}" \
-    "cd ~/flare-build-node && docker build --build-arg FLARE_COMMIT=${sha} -t ${REGISTRY}/flare-node:${short} ."
+    "cd ~/flare-build-node && docker build --build-arg FLARE_COMMIT=${sha} --build-arg FLARE_PATCHES='${PATCHES}' -t ${REGISTRY}/flare-node:${short} ."
 ssh_to "${BUILD_HOST}" "docker push ${REGISTRY}/flare-node:${short}"
 
 note "control-plane image on ${CONTROL_HOST} (x86_64)"

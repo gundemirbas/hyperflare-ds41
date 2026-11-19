@@ -10,6 +10,7 @@
 #   ./deploy.sh build        build both images at ${COMMIT} and push
 #   ./deploy.sh rollout      pull the node image, install the binary, refresh agents
 #   ./deploy.sh pair         install agents and pair every host with the controller
+#   ./deploy.sh stage        place the newest core on every host ahead of a launch
 #   ./deploy.sh prepare      produce a new core from the checkpoint (hours)
 #   ./deploy.sh up|down      start or stop the Orbit group
 #   ./deploy.sh status       group and node status
@@ -33,6 +34,7 @@ case "${command}" in
     build)    ./build.sh "$@" ;;
     rollout)  ./rollout.sh "$@" ;;
     pair)     ./pair.sh ;;
+    stage)    ./stage.sh "$@" ;;
     prepare)  ./prepare.sh "$@" ;;
     up)       ./group.sh up ;;
     down)     ./group.sh down ;;

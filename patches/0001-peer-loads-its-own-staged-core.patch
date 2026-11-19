@@ -1,0 +1,75 @@
+Subject: [PATCH] Let a peer load its own staged core instead of receiving it
+
+A peer already supports a local core: distribution::peer takes the path from
+--core, leases the cache entry, and verify_local_core rejects a core whose
+signed envelope, model, tensor-parallel size or cluster export differs from
+rank zero's. The agent passes such a path only when the grant names this node as
+the core's source, and the controller names exactly one holder, so in practice
+every peer receives its ranges from rank zero at launch even when orbit push has
+already staged that rank's directory on the node.
+
+This adds a per-member staged flag. The controller sets it when the node's
+STATUS reports that rank's staged directory verified, and the agent then starts
+the rank from its own path. Rank zero keeps distributing whatever a peer cannot
+supply, so partial staging stays correct.
+
+The saving lands on the source node: with every peer staged, rank zero no longer
+needs the other ranks' payloads for a launch, which is about two thirds of a
+three-rank core.
+---
+diff --git a/flare-cli/src/orbit/agent.rs b/flare-cli/src/orbit/agent.rs
+index 642c08fc..f9c6a18f 100644
+--- a/flare-cli/src/orbit/agent.rs
++++ b/flare-cli/src/orbit/agent.rs
+@@ -1406,6 +1406,14 @@ fn run(agent: &Arc<Agent>, request: &Value) -> Result<Arc<Group>, Failure> {
+             .source
+             .as_ref()
+             .is_some_and(|source| source.public_key == mine.to_hex());
++    // A rank whose staged directory the controller verified loads its own copy; rank zero
++    // then distributes only what a peer cannot supply.
++    let local_core = local_core
++        || grant
++            .members
++            .iter()
++            .find(|member| member.rank == rank)
++            .is_some_and(|member| member.staged);
+     if local_core && !core.is_file() {
+         return Err(format!("core {} is not on this node", core.display()).into());
+     }
+diff --git a/flare-cli/src/orbit/controller.rs b/flare-cli/src/orbit/controller.rs
+index f6e1f5af..10ba5321 100644
+--- a/flare-cli/src/orbit/controller.rs
++++ b/flare-cli/src/orbit/controller.rs
+@@ -1361,6 +1361,16 @@ impl Controller {
+                     public_key: node.public_key.clone(),
+                     address: node.address.clone(),
+                     gpus: placements[rank].clone(),
++                    staged: core
++                        .needs
++                        .rank_directories
++                        .get(rank)
++                        .is_some_and(|directory| {
++                            statuses[rank]
++                                .cores
++                                .iter()
++                                .any(|p| p.verified && &p.name == directory)
++                        }),
+                 })
+                 .collect(),
+             rendezvous,
+diff --git a/flare-cli/src/orbit/grant.rs b/flare-cli/src/orbit/grant.rs
+index 354ad8fe..bf9e72dd 100644
+--- a/flare-cli/src/orbit/grant.rs
++++ b/flare-cli/src/orbit/grant.rs
+@@ -64,6 +64,11 @@ pub struct Member {
+     /// UUIDs of the GPUs the rank uses on its node; empty leaves the choice to the rank.
+     #[serde(default)]
+     pub gpus: Vec<String>,
++    /// The node holds this rank's staged directory, so the rank loads that copy instead of
++    /// receiving its ranges from rank zero. Absent from a grant signed before this field
++    /// existed, which keeps an older grant launching as it did.
++    #[serde(default)]
++    pub staged: bool,
+ }
+ 
+ /// Where a node-held core lives: the node's public key and the primary file's absolute path.
