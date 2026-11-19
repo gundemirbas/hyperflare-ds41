@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Flare community contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Control-plane image: the Orbit controller CLI and the Selene pool manager.
+# Neither binary uses a GPU, so the container runs on a CPU-only node.
+#
+#   podman build -t localhost/flare-control-plane:latest .
+#   podman build --build-arg FLARE_COMMIT=main -t localhost/flare-control-plane:latest .
+
+FROM rust:1.94.1-bookworm AS build
+
+ARG FLARE_REPOSITORY=https://github.com/NVIDIA/hyperflare-inference.git
+ARG FLARE_COMMIT=main
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates git cmake nasm ninja-build pkg-config \
+        protobuf-compiler libssl-dev liburing-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --filter=blob:none "${FLARE_REPOSITORY}" /src \
+    && cd /src && git checkout "${FLARE_COMMIT}"
+
+WORKDIR /src
+RUN cargo build --release --locked --manifest-path flare-cli/Cargo.toml \
+    && cargo build --release --locked --manifest-path selene-manager/Cargo.toml
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates libssl3 liburing2 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /src/flare-cli/target/release/flare /usr/local/bin/flare
+COPY --from=build /src/selene-manager/target/release/selene /usr/local/bin/selene
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh && mkdir -p /var/lib/selene /run/selene
+
+ENV SELENE_NAME=ds41 \
+    SELENE_ROOT=/var/lib/selene \
+    SELENE_MEMORY=24G \
+    SELENE_NVME=200G \
+    SELENE_STAGING=1G \
+    SELENE_LISTEN=0.0.0.0:9200 \
+    SELENE_LISTEN_DATA=0.0.0.0:9201 \
+    SELENE_METRICS=127.0.0.1:9108
+
+VOLUME ["/var/lib/selene"]
+EXPOSE 9200 9201 9108
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["selene"]

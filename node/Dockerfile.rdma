@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Flare community contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# One layer on top of the node image: the RDMA userspace and headers the native
+# binary and its preparation path need on aarch64.
+#
+#   docker tag flare-node:latest flare-node-base:latest
+#   docker build -t flare-node:latest -f Dockerfile.rdma .
+FROM flare-node-base:latest
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libibverbs1 libibverbs-dev rdma-core libnuma1 \
+    && rm -rf /var/lib/apt/lists/*

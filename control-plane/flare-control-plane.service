@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Flare community contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# User unit for the control-plane container: the Selene pool manager that every
+# serving rank attaches to. Host networking keeps 9200, 9201 and 9108 visible.
+[Unit]
+Description=Flare control plane (Orbit controller and Selene pool)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStartPre=-/run/current-system/sw/bin/podman rm -f flare-control-plane
+ExecStart=/run/current-system/sw/bin/podman run --rm --name flare-control-plane \
+    --network=host \
+    --security-opt seccomp=unconfined \
+    --shm-size 32G \
+    --volume %h/selene-pool:/var/lib/selene \
+    --volume %h/.config/flare:/root/.config/flare:ro \
+    localhost/flare-control-plane:latest selene
+ExecStop=/run/current-system/sw/bin/podman stop -t 30 flare-control-plane
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
