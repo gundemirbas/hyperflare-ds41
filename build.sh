@@ -39,8 +39,12 @@ note "control-plane image on ${CONTROL_HOST} (x86_64)"
 ssh_to "${CONTROL_HOST}" 'rm -rf ~/flare-build-control && mkdir -p ~/flare-build-control'
 copy_to "${CONTROL_HOST}" "${HERE}/control-plane/Containerfile" "${HOME}/flare-build-control/Containerfile"
 copy_to "${CONTROL_HOST}" "${HERE}/control-plane/entrypoint.sh" "${HOME}/flare-build-control/entrypoint.sh"
+ssh_to "${CONTROL_HOST}" 'mkdir -p ~/flare-build-control/patches && touch ~/flare-build-control/patches/.keep'
+for patch in ${PATCHES}; do
+    copy_to "${CONTROL_HOST}" "${HERE}/patches/${patch}" "${HOME}/flare-build-control/patches/${patch}"
+done
 ssh_to "${CONTROL_HOST}" \
-    "cd ~/flare-build-control && podman build --build-arg FLARE_COMMIT=${sha} -t ${REGISTRY}/flare-control-plane:${short} ."
+    "cd ~/flare-build-control && podman build --build-arg FLARE_COMMIT=${sha} --build-arg FLARE_PATCHES='${PATCHES}' -t ${REGISTRY}/flare-control-plane:${short} ."
 ssh_to "${CONTROL_HOST}" "podman push ${REGISTRY}/flare-control-plane:${short}"
 
 note "pushed"

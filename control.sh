@@ -14,7 +14,12 @@ cd "${HERE}"
 . ./cluster.env
 . ./lib.sh
 
-IMAGE=localhost/flare-control-plane:latest
+short=$(cat "${HERE}/.last-build" 2>/dev/null || echo "")
+if [ -n "${short}" ]; then
+    IMAGE=${REGISTRY}/flare-control-plane:${short}
+else
+    IMAGE=localhost/flare-control-plane:latest
+fi
 UNIT=flare-control-plane.service
 
 pool_answers() {
@@ -25,6 +30,15 @@ pool_answers() {
 case "${1:-ensure}" in
     ensure)
         note "control plane on ${CONTROL_HOST}"
+        # A recorded tag from a node-only build has no control-plane image behind
+        # it; fall back to the local one before building from scratch.
+        if ! ssh_to "${CONTROL_HOST}" "podman image exists ${IMAGE}"; then
+            local_image=localhost/flare-control-plane:latest
+            if [ "${IMAGE}" != "${local_image}" ] && ssh_to "${CONTROL_HOST}" "podman image exists ${local_image}"; then
+                step "no ${IMAGE}; using ${local_image}"
+                IMAGE=${local_image}
+            fi
+        fi
         if ! ssh_to "${CONTROL_HOST}" "podman image exists ${IMAGE}"; then
             step "image missing, building from control-plane/"
             ssh_to "${CONTROL_HOST}" 'rm -rf ~/flare-build-control && mkdir -p ~/flare-build-control'
@@ -42,6 +56,20 @@ case "${1:-ensure}" in
             systemctl --user daemon-reload || true;
             systemctl --user enable ${UNIT} >/dev/null 2>&1 || true;
             systemctl --user restart ${UNIT}"
+        # The controller CLI comes out of the image the pool runs, so the grant
+        # schema and the placement logic match the agents exactly.
+        ssh_to "${CONTROL_HOST}" "
+            set -e
+            mkdir -p \$HOME/.local/bin
+            podman rm -f flare-cli-extract >/dev/null 2>&1 || true
+            podman create --name flare-cli-extract '${IMAGE}' >/dev/null
+            podman cp flare-cli-extract:/usr/local/bin/flare \$HOME/.local/bin/flare.new >/dev/null
+            podman rm -f flare-cli-extract >/dev/null
+            chmod 0755 \$HOME/.local/bin/flare.new
+            if [ -f \$HOME/.local/bin/flare ]; then cp -f \$HOME/.local/bin/flare \$HOME/.local/bin/flare.previous; fi
+            mv -f \$HOME/.local/bin/flare.new \$HOME/.local/bin/flare
+            \$HOME/.local/bin/flare --version | sed 's/^/   cli /'
+        "
         sleep 6
         ssh_to "${CONTROL_HOST}" 'systemctl --user is-active '"${UNIT}"' | sed "s/^/   /"'
         ssh_to "${CONTROL_HOST}" 'ss -ltn | grep -cE ":9200|:9201"' \

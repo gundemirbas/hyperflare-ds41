@@ -57,3 +57,19 @@ is set — `./build.sh <sha>` — because `main` moves and a moved tree can reje
 the hunks. The revision the patch was generated against is the clone this
 directory was written in; `git apply --check` against the build host's clone
 confirms it before an image is built.
+
+### Both images carry the patch
+
+`grant.rs` is the signed grant schema, `controller.rs` decides placement, and
+`agent.rs` runs on the serving hosts. The controller and the agent therefore have
+to be built from patched sources: `build.sh` passes `PATCHES` to the node image
+and to the control-plane image alike.
+
+`control.sh ensure` installs the controller CLI out of the control-plane image
+over `~/.local/bin/flare`, so the command that writes a grant is the one that
+knows the new field. `rollout.sh` does the same for `/usr/bin/flare` on each
+host from the node image.
+
+A mixed pair still launches: `staged` carries `#[serde(default)]`, so an older
+agent ignores the flag and receives as before, and an older controller never sets
+it. The saving appears only once both sides are patched.
