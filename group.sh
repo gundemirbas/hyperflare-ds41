@@ -2,10 +2,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Flare community contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Drive the Orbit group. `up` brings the Selene pool container first, then defines
-# the group from scratch and starts it: `orbit run` inherits unspecified flags
-# from a saved group, so reusing a stale definition silently keeps an old core or
-# an old pool address.
+# Drive the Orbit group from rank zero. `up` defines the group from scratch and
+# starts it: `orbit run` inherits unspecified flags from a saved group, so reusing a
+# stale definition silently keeps an old core or an old prefix-cache setting.
 #
 #   ./group.sh up|down|status|health
 set -eu
@@ -29,8 +28,6 @@ resolve_core() {
 
 case "${1:-status}" in
     up)
-        ./control.sh ensure
-
         core=$(resolve_core)
         [ -n "${core}" ] || fatal "no prepared core under ${CORE_ROOT}"
         note "core ${core}"
@@ -50,7 +47,6 @@ case "${1:-status}" in
             --prefix-cache-disk '${PREFIX_DISK}' \
             --prefix-cache-disk-limit '${PREFIX_DISK_LIMIT}' \
             --prefix-cache-memory 0 \
-            --prefix-cache-pool '${POOL_ADDR}' \
             --publisher-keys '${PUBLISHER_KEYS}' \
             --dangerously-accept-publisher '${PUBLISHER_NAMESPACE}' \
             --dangerously-approve-key '${APPROVE_KEY}'" | tail -3

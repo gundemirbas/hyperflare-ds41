@@ -72,22 +72,11 @@ Rollback restores the binary that `rollout.sh` saved in `/opt/flare-previous`:
 ## Where the complete core lives
 
 The export writes the complete core on rank zero: every rank's shard plus the
-Engram tables, about 470 GB for three ranks. One rank needs about 157 GB, so most
-of that core exists to be distributed. `archive.sh` copies it onto the control
-node, after which the source node only needs its own share:
+Engram tables, about 470 GB for three ranks. Its manifest names every file, so a
+launch from that core requires all of them present; the source node keeps the
+complete artifact.
 
-```sh
-./deploy.sh archive              # complete core onto the control node from rank zero
-./deploy.sh stage --archive 246  # ...or onto a single host
-./deploy.sh stage                # each rank's own directory on its host
-./deploy.sh control              # controller CLI from the control-plane image
-./deploy.sh up                   # launch
-```
-
-With every rank staged, the source's `weights/tp3/rank-<n>` and `deployments`
-entries for the other ranks can go. A peer that loses its staged directory is
-restored by `./deploy.sh stage`, which uploads from the archive rather than
-sending rank zero's copy, and a re-export is the last resort.
-
-Keep the archive until the next export replaces it; `cleanup.sh` does not touch
-`ARCHIVE_ROOT`.
+A peer receives its own ranges on first launch and reuses the verified cache
+entry afterwards, so later launches transfer nothing. `archive.sh` copies the
+complete core onto the control node as a recovery source: a peer that loses its
+cache is restored without another export.

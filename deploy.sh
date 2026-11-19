@@ -5,13 +5,11 @@
 # One entry point for the whole control plane. Run it on the control node.
 #
 #   ./deploy.sh registry     start the local registry
-#   ./deploy.sh control      start the control plane (Selene pool)
 #   ./deploy.sh cleanup      reclaim disk on the serving hosts
 #   ./deploy.sh build        build both images at ${COMMIT} and push
 #   ./deploy.sh rollout      pull the node image, install the binary, refresh agents
 #   ./deploy.sh pair         install agents and pair every host with the controller
 #   ./deploy.sh archive      copy the complete core onto the control node
-#   ./deploy.sh stage        place the newest core on every host ahead of a launch
 #   ./deploy.sh prepare      produce a new core from the checkpoint (hours)
 #   ./deploy.sh up|down      start or stop the Orbit group
 #   ./deploy.sh status       group and node status
@@ -30,12 +28,10 @@ shift 2>/dev/null || true
 
 case "${command}" in
     registry) ./registry.sh start ;;
-    control)  ./control.sh "${1:-ensure}" ;;
     cleanup)  ./cleanup.sh "$@" ;;
     build)    ./build.sh "$@" ;;
     rollout)  ./rollout.sh "$@" ;;
     pair)     ./pair.sh ;;
-    stage)    ./stage.sh "$@" ;;
     archive)  ./archive.sh "$@" ;;
     prepare)  ./prepare.sh "$@" ;;
     up)       ./group.sh up ;;
@@ -60,7 +56,6 @@ case "${command}" in
         ;;
     all)
         ./registry.sh start
-        ./control.sh ensure
         ./build.sh
         ./rollout.sh
         ./pair.sh
