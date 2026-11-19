@@ -170,7 +170,7 @@ LOOP
             ssh_to "${CONTROL_HOST}" "
                 docker rm -f ${CONTROLLER} >/dev/null 2>&1 || true
                 docker run -d --name ${CONTROLLER} --restart unless-stopped --network=host \
-                    --volume \$HOME:\$HOME --env HOME=\$HOME \
+                    --user \$(id -u):\$(id -g) --volume \$HOME:\$HOME --env HOME=\$HOME \
                     --entrypoint /bin/sh ${image} ${HOME}/.config/flare/controller-loop.sh >/dev/null
                 docker ps --filter name=${CONTROLLER} --format '   {{.Names}} {{.Status}}'
             "
